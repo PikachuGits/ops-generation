@@ -140,7 +140,7 @@ E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
 - 交付验收记录的总覆盖率为 79%。本次在 Python 3.12.12 复核时，忽略分支计数的行覆盖率分别为默认 80%、启用 E2E 后 82%；按仓库 `pyproject.toml` 的 `branch = true` 统计时分别为 77%、78%。README 保留 79% 作为交付记录，并注明本次分支覆盖复测数，避免将不同覆盖率口径混为一个数字。
 - CI 记录：工作流修正后的提交 `7cac139` 对应 [run #43999228171](https://github.com/PikachuGits/ops-generation/actions/runs/43999228171)，**通过**：`33 passed, 2 skipped`、分支覆盖率 77%、耗时 22s；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例，设置变量后本地为 `35 passed`。此后文档类提交（含本 README 更新）由同一工作流执行并保持通过。
 - 工作流历史：首条 [run #43996080301](https://github.com/PikachuGits/ops-generation/actions/runs/43996080301)（SHA `15433b4a251df27ebb66c1e4a61d4770f5e99c28`）失败于安装依赖阶段，原因是工作流把仓库根误写成 `ops-generation/` 子目录，找不到 `ops-generation/requirements.txt`；该路径错误已由上述通过记录对应的提交修正。
-- GitHub 仓库 `PikachuGits/ops-generation` 为私有仓库。审核人需由仓库所有者/管理员按其 GitHub 账号授予至少 Read 权限；未提供审核人账号，当前无法核验该具体人员的访问权。未经所有者明确授权不改变仓库可见性。
+- GitHub 仓库 [PikachuGits/ops-generation](https://github.com/PikachuGits/ops-generation) 为公开仓库，默认分支 `main`；README、测试与代码均可匿名读取，例如 `https://raw.githubusercontent.com/PikachuGits/ops-generation/main/README.md`。
 
 迁移：`alembic upgrade head`；降级命令会删除两张业务表，仅限可丢弃的本地数据库，执行前须自行备份并确认。
 
