@@ -137,9 +137,9 @@ E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
 
 ### 本地复验与 CI 状态
 
-- 按仓库 `requirements.txt` 在 Python 3.12.12 复跑：默认 `34 passed, 2 skipped`；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例。设置 `E2E_DATABASE_URL` 与 `E2E_REDIS_URL` 后：`36 passed`。
+- 按仓库 `requirements.txt` 在 Python 3.12 复跑：默认 `34 passed, 2 skipped`；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例。设置 `E2E_DATABASE_URL` 与 `E2E_REDIS_URL` 后：`36 passed`。
 - 覆盖率使用仓库 `pyproject.toml` 的 `branch = true` 口径：默认 77%，启用 E2E 后 79%；本次新增贯通测试后已更新 E2E 数值，达到交付记录的 79%。忽略分支计数的行覆盖率另为默认 80%、E2E 82%，避免将不同统计口径混为一个数字。
-- 最近一次已完成的 GitHub Actions 记录：提交 `c61da4b` 对应 [run #44001530633](https://github.com/PikachuGits/ops-generation/actions/runs/44001530633)，**通过**。该 CI 运行时尚未包含本次新增的 429 贯通测试；新测试目前本地验证通过，需推送后由 CI 再验证。
+- 最近一次 CI：提交 `6c57a0a`（含 429 贯通测试）对应 [run #44004329048](https://github.com/PikachuGits/ops-generation/actions/runs/44004329048)，**通过**：`34 passed, 2 skipped`、分支覆盖率 77%、耗时 20s，该运行已包含 `tests/test_quota_error_chain.py`。
 - 工作流历史：首条 [run #43996080301](https://github.com/PikachuGits/ops-generation/actions/runs/43996080301)（SHA `15433b4a251df27ebb66c1e4a61d4770f5e99c28`）失败于安装依赖阶段，原因是工作流把仓库根误写成 `ops-generation/` 子目录，找不到 `ops-generation/requirements.txt`；该路径错误已由上述通过记录对应的提交修正。
 - GitHub 仓库 [PikachuGits/ops-generation](https://github.com/PikachuGits/ops-generation) 为公开仓库，默认分支 `main`；README、测试与代码均可匿名读取，例如 `https://raw.githubusercontent.com/PikachuGits/ops-generation/main/README.md`。
 
