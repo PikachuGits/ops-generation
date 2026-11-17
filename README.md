@@ -112,12 +112,13 @@ E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
 ```
 
 - `tests/test_pipeline.py`：mock 网关正常生成后断言 `drafted`、非空 `draft_id`、`lint_issues` 持久化；复核队列重试复用已保存的生成检查点。
-- `tests/test_http_adapters.py`：真实 HTTP 适配器逻辑的 mock 响应测试覆盖 429 → `QUOTA_EXCEEDED`、5xx → `ALL_PROVIDERS_FAILED` 及响应 schema 错误；`tests/test_error_map.py` 断言失败状态、四类错误码和中文提示。
+- `tests/test_quota_error_chain.py`：`httpx.MockTransport` 返回 HTTP 429，经 `HttpGatewayClient` 进入 `service.run()`，贯通断言 job `failed`、`QUOTA_EXCEEDED`、精确中文提示，且不会调用复核队列。这是验收 ② 的直接单元测试证据。
+- `tests/test_http_adapters.py`：独立覆盖 HTTP 适配器的 429 → `QUOTA_EXCEEDED`、5xx → `ALL_PROVIDERS_FAILED` 及响应 schema 错误；`tests/test_error_map.py` 另测四类错误码与中文提示映射。
 - `tests/test_idempotency.py`：相同组织、站点、用户、功能和规范化输入在 60 秒内复用同一 job；改变组织、站点或用户时分别新建 job；另测 Redis 不可用时数据库兜底及 TTL 到期。
 - `tests/test_local_e2e.py`：显式指定本地 PG/Redis 后，以 FastAPI 测试客户端跑真实数据库和 Redis、mock 网关/复核队列；覆盖重复提交、8 路并发幂等、租户隔离、异步处理和 429 错误映射。测试只写入随机标识数据，不会自动清理。
 - `tests/test_egress_guard.py`：拦截 `socket`/`httpx`，只放行网关和复核队列适配器及固定路径；用例使用 SQLite 与 mock HTTP，不代表生产网络防火墙测试。
 - `tests/test_worker.py`：worker 正常完成、queued 任务重试及耗尽上限。
-- 四条任务验收映射：① mock 正常生成 → `drafted` 和 `draft_id`（管线测试 + 本地 PG/Redis API 集成）；② HTTP adapter 的 mock 429 映射为 `QUOTA_EXCEEDED`，service 测试断言 `failed` 与中文提示，PG/Redis E2E 另用 mock 网关异常验证该状态持久化；③ 同一 scope 的 60 秒重复请求只生成同一 job（串行与 8 路并发测试，网关和复核各只调用一次）；④ 业务 HTTP 出站限制 → 固定两个 adapter 的 `socket`/`httpx` 白名单守卫及下方逐文件清单。
+- 四条任务验收映射：① mock 正常生成 → `drafted` 和 `draft_id`（管线测试 + 本地 PG/Redis API 集成）；② HTTP 429 → `HttpGatewayClient` 抛出 `QUOTA_EXCEEDED`，经 `service.run()` 持久化为 `failed`，返回指定中文提示（`tests/test_quota_error_chain.py`）；③ 同一 scope 的 60 秒重复请求只生成同一 job（串行与 8 路并发测试，网关和复核各只调用一次）；④ 业务 HTTP 出站限制 → 固定两个 adapter 的 `socket`/`httpx` 白名单守卫及下方逐文件清单。
 
 ### 逐文件出站点清单
 
@@ -136,9 +137,9 @@ E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
 
 ### 本地复验与 CI 状态
 
-- 按仓库 `requirements.txt` 在 Python 3.12.12 复跑默认全套：`33 passed, 2 skipped`；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例。设置 `E2E_DATABASE_URL` 与 `E2E_REDIS_URL` 后：`35 passed`。
-- 交付验收记录的总覆盖率为 79%。本次在 Python 3.12.12 复核时，忽略分支计数的行覆盖率分别为默认 80%、启用 E2E 后 82%；按仓库 `pyproject.toml` 的 `branch = true` 统计时分别为 77%、78%。README 保留 79% 作为交付记录，并注明本次分支覆盖复测数，避免将不同覆盖率口径混为一个数字。
-- CI 记录：工作流修正后的提交 `7cac139` 对应 [run #43999228171](https://github.com/PikachuGits/ops-generation/actions/runs/43999228171)，**通过**：`33 passed, 2 skipped`、分支覆盖率 77%、耗时 22s；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例，设置变量后本地为 `35 passed`。此后文档类提交（含本 README 更新）由同一工作流执行并保持通过。
+- 按仓库 `requirements.txt` 在 Python 3.12.12 复跑：默认 `34 passed, 2 skipped`；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例。设置 `E2E_DATABASE_URL` 与 `E2E_REDIS_URL` 后：`36 passed`。
+- 覆盖率使用仓库 `pyproject.toml` 的 `branch = true` 口径：默认 77%，启用 E2E 后 79%；本次新增贯通测试后已更新 E2E 数值，达到交付记录的 79%。忽略分支计数的行覆盖率另为默认 80%、E2E 82%，避免将不同统计口径混为一个数字。
+- 最近一次已完成的 GitHub Actions 记录：提交 `c61da4b` 对应 [run #44001530633](https://github.com/PikachuGits/ops-generation/actions/runs/44001530633)，**通过**。该 CI 运行时尚未包含本次新增的 429 贯通测试；新测试目前本地验证通过，需推送后由 CI 再验证。
 - 工作流历史：首条 [run #43996080301](https://github.com/PikachuGits/ops-generation/actions/runs/43996080301)（SHA `15433b4a251df27ebb66c1e4a61d4770f5e99c28`）失败于安装依赖阶段，原因是工作流把仓库根误写成 `ops-generation/` 子目录，找不到 `ops-generation/requirements.txt`；该路径错误已由上述通过记录对应的提交修正。
 - GitHub 仓库 [PikachuGits/ops-generation](https://github.com/PikachuGits/ops-generation) 为公开仓库，默认分支 `main`；README、测试与代码均可匿名读取，例如 `https://raw.githubusercontent.com/PikachuGits/ops-generation/main/README.md`。
 
