@@ -88,28 +88,64 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/generations \
 
 ## 验收与复验
 
+命令从仓库根目录（本项目即仓库根目录）执行。先创建环境并安装依赖：
+
 ```bash
-pytest -q
-pytest --cov=app --cov-report=term-missing
-E2E_DATABASE_URL=postgresql+psycopg://ops:ops@127.0.0.1:5432/ops_generation \
-E2E_REDIS_URL=redis://127.0.0.1:6379/0 pytest -q tests/test_local_e2e.py
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
-- `tests/test_pipeline.py`：mock 网关 → `drafted`、`draft_id` 和 `lint_issues` 入库；验证复核重试复用生成检查点。
-- `tests/test_error_map.py`、`tests/test_http_adapters.py`：429、5xx、响应 schema 错误与四类错误码中文提示。
-- `tests/test_idempotency.py`：同输入三次仅一个 job、一次网关和复核调用；验证 Redis 缺失时数据库兜底、不同用户隔离和 60 秒过期。
-- `tests/test_local_e2e.py`：显式指定本地 PG/Redis 后，以 FastAPI 测试客户端跑真实数据库与 Redis 的 mock 端到端；覆盖 API、同输入重复、并发幂等、租户隔离、异步处理和 429 错误映射。默认未设置 E2E 环境变量时会跳过。
-- `tests/test_egress_guard.py`：拦截 `socket`/`httpx`，只放行网关和复核队列适配器及其固定路径。
-- `tests/test_worker.py`：worker 正常完成、queued 任务重试与耗尽上限。
-- 四条任务验收映射：① mock 正常生成 → `drafted` 和 `draft_id`（管线测试 + 本地 PG/Redis HTTP 集成）；② mock 429 → `failed`、`QUOTA_EXCEEDED` 和中文提示（HTTP adapter + DB/Redis 集成）；③ 同用户 60 秒重复请求 → 同一 job（串行与 8 路并发集成，网关和复核各只调用一次）；④ 出站限制 → 固定两个 adapter 的 socket/httpx 白名单守卫。
-- `.github/workflows/tests.yml`：仓库连接 GitHub 后自动执行单测与覆盖率命令。当前工作区没有 Git 元数据/远端，因此未生成真实 CI 运行记录。
-- 本轮本地验证：在真实本地 PG16/Redis7 上 `35 passed`，总覆盖率 81%；迁移版本 `0002_native_uuid_ids (head)`，PostgreSQL 回查确认 job 主键类型为 `uuid`；Uvicorn loopback mock server HTTP 验证健康、生成草稿、幂等重放、查询和跨用户 404 均通过。
+默认完整测试只用内存 SQLite、FakeRedis 和 mock adapter，不要求启动 PostgreSQL/Redis；`tests/test_local_e2e.py` 的两条 E2E 用例在未设置 E2E 环境变量时会跳过：
+
+```bash
+.venv/bin/python -m pytest -q --cov=app --cov-report=term-missing
+```
+
+如需执行真实本地 PostgreSQL 16/Redis 7 的端到端测试，先启动服务并迁移 schema。仅使用本地隔离测试数据库；用例会写入带随机标识的验收数据且不会自动清理，不要连接生产或共享数据库：
+
+```bash
+docker compose up -d postgres redis
+.venv/bin/python -m alembic upgrade head
+E2E_DATABASE_URL=postgresql+psycopg://ops:ops@127.0.0.1:5432/ops_generation \
+E2E_REDIS_URL=redis://127.0.0.1:6379/0 \
+.venv/bin/python -m pytest -q --cov=app --cov-report=term-missing
+```
+
+- `tests/test_pipeline.py`：mock 网关正常生成后断言 `drafted`、非空 `draft_id`、`lint_issues` 持久化；复核队列重试复用已保存的生成检查点。
+- `tests/test_http_adapters.py`：真实 HTTP 适配器逻辑的 mock 响应测试覆盖 429 → `QUOTA_EXCEEDED`、5xx → `ALL_PROVIDERS_FAILED` 及响应 schema 错误；`tests/test_error_map.py` 断言失败状态、四类错误码和中文提示。
+- `tests/test_idempotency.py`：相同组织、站点、用户、功能和规范化输入在 60 秒内复用同一 job；改变组织、站点或用户时分别新建 job；另测 Redis 不可用时数据库兜底及 TTL 到期。
+- `tests/test_local_e2e.py`：显式指定本地 PG/Redis 后，以 FastAPI 测试客户端跑真实数据库和 Redis、mock 网关/复核队列；覆盖重复提交、8 路并发幂等、租户隔离、异步处理和 429 错误映射。测试只写入随机标识数据，不会自动清理。
+- `tests/test_egress_guard.py`：拦截 `socket`/`httpx`，只放行网关和复核队列适配器及固定路径；用例使用 SQLite 与 mock HTTP，不代表生产网络防火墙测试。
+- `tests/test_worker.py`：worker 正常完成、queued 任务重试及耗尽上限。
+- 四条任务验收映射：① mock 正常生成 → `drafted` 和 `draft_id`（管线测试 + 本地 PG/Redis API 集成）；② HTTP adapter 的 mock 429 映射为 `QUOTA_EXCEEDED`，service 测试断言 `failed` 与中文提示，PG/Redis E2E 另用 mock 网关异常验证该状态持久化；③ 同一 scope 的 60 秒重复请求只生成同一 job（串行与 8 路并发测试，网关和复核各只调用一次）；④ 业务 HTTP 出站限制 → 固定两个 adapter 的 `socket`/`httpx` 白名单守卫及下方逐文件清单。
+
+### 逐文件出站点清单
+
+| 文件 | 可能的网络目标 | 范围与触发条件 |
+|---|---|---|
+| `app/clients/gateway.py` | 配置的 `GATEWAY_BASE_URL`，固定 `POST /api/gw/v1/chat/completions` | 唯一模型网关 HTTP adapter；仅网关启用且配置 URL 后调用；关闭环境代理读取。 |
+| `app/clients/review_queue.py` | 配置的 `REVIEW_QUEUE_BASE_URL`，固定 `POST /api/review/drafts` | 唯一复核队列 HTTP adapter；随请求携带 `Idempotency-Key: job_id`；关闭环境代理读取。 |
+| `app/db.py` | `DATABASE_URL` 指定的 PostgreSQL | SQLAlchemy 数据库连接；属于显式基础设施依赖，不是业务 HTTP 调用。 |
+| `app/runtime.py` | `REDIS_URL` 指定的 Redis | 创建运行时 Redis client，并组装数据库、HTTP adapters 和 dispatcher。 |
+| `app/queueing.py` | 通过 Celery task 进入 Redis broker | `CeleryDispatcher.enqueue()` 调用任务 `.delay()` 时触发。 |
+| `app/worker.py` | `REDIS_URL` 指定的 Celery broker/backend | worker 领取任务、写入结果时使用；不访问第三方业务服务。 |
+| `alembic/env.py` | `DATABASE_URL` 指定的 PostgreSQL | 仅运行 Alembic 迁移命令时连接数据库。 |
+| `app/local_mock.py` | `DATABASE_URL` 与 `REDIS_URL`，且强制 loopback | 本地 mock 入口；网关和复核队列均为进程内 mock，不发外部 HTTP。 |
+
+业务 HTTP 出站只有前两项：模型网关与复核队列。PostgreSQL/Redis/Celery 是独立基础设施网络连接，部署网络策略应仅放行配置的基础设施地址；`test_egress_guard.py` 使用本地 SQLite/mock，守卫覆盖范围不等同于生产网络 ACL。测试中的 `tests/conftest.py` 使用 ASGI in-process transport，`tests/test_http_adapters.py` 使用 `httpx.MockTransport`，不会访问真实业务服务。
+
+### 本地复验与 CI 状态
+
+- 按仓库 `requirements.txt` 在 Python 3.12.12 复跑默认全套：`33 passed, 2 skipped`；两条 skip 是未设置 E2E 环境变量时跳过的本地 PG/Redis 用例。设置 `E2E_DATABASE_URL` 与 `E2E_REDIS_URL` 后：`35 passed`。
+- 交付验收记录的总覆盖率为 79%。本次在 Python 3.12.12 复核时，忽略分支计数的行覆盖率分别为默认 80%、启用 E2E 后 82%；按仓库 `pyproject.toml` 的 `branch = true` 统计时分别为 77%、78%。README 保留 79% 作为交付记录，并注明本次分支覆盖复测数，避免将不同覆盖率口径混为一个数字。
+- GitHub Actions 历史记录为 [run #43996080301](https://github.com/PikachuGits/ops-generation/actions/runs/43996080301)，对应 SHA `15433b4a251df27ebb66c1e4a61d4770f5e99c28`，失败于安装依赖阶段：在仓库根目录找不到错误引用的 `ops-generation/requirements.txt`。本次已修正工作流路径并随当前提交推送；修正后的 CI 结果以 GitHub Actions 最新记录为准。
+- GitHub 仓库 `PikachuGits/ops-generation` 为私有仓库。审核人需由仓库所有者/管理员按其 GitHub 账号授予至少 Read 权限；未提供审核人账号，当前无法核验该具体人员的访问权。未经所有者明确授权不改变仓库可见性。
 
 迁移：`alembic upgrade head`；降级命令会删除两张业务表，仅限可丢弃的本地数据库，执行前须自行备份并确认。
 
 ## 明确的对接边界
 
 - 业务数据只来自调用方提供的 JSON 输入；测试只用虚构样例。不采集其他数据，也不调用未列明的外部数据工具。
-- 外部 HTTP 仅调用配置的模型网关和复核队列；PostgreSQL、Redis 是明确的基础设施依赖，不属于业务外部数据源。
+- 外部 HTTP 仅调用配置的模型网关和复核队列；PostgreSQL、Redis 是明确的基础设施依赖，不属于业务外部数据源。幂等键不是裸 `input_sha256`：`input_sha256` 由 `function_code` 与规范化输入计算，最终幂等键还纳入 `org_id`、`site_id`、`user_id`、`function_code` 和 `input_sha256` 后再哈希；同一组织/站点/用户及功能下 60 秒内的相同输入复用同一 job，不同组织、站点或用户即使输入相同也互相隔离、分别建 job。
 - 网关 URL 路径按需求约定 `/api/gw/v1/chat/completions`，复核队列按 `/api/review/drafts`；字段细节、鉴权和正式模板待依赖方提供接口契约后替换，现有适配器不含真实凭据。
 - 不含前端、不实现用户注册登录/权限策略、不实现计费、不发送或发布内容；需由可信身份层提供租户上下文。
