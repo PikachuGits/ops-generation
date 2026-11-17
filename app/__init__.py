@@ -1,0 +1,1 @@
+"""Isolated operations-generation service."""

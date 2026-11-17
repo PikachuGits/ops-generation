@@ -1,0 +1,1 @@
+"""Approved outbound adapter clients."""
